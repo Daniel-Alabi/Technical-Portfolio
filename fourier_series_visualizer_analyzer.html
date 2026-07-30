@@ -1,0 +1,263 @@
+<div style="padding: 0.5rem 0;">
+<h2 class="sr-only" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)">Interactive Fourier series tool: pick a waveform, set the number of harmonics, and see the partial-sum reconstruction, error metrics, and magnitude spectrum.</h2>
+
+<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:1rem;">
+  <div>
+    <label style="font-size:13px;color:var(--text-secondary);display:block;margin-bottom:4px;">Waveform</label>
+    <select id="wf" style="width:100%;">
+      <option value="square">Square</option>
+      <option value="saw">Sawtooth</option>
+      <option value="tri">Triangle</option>
+      <option value="pulse">Pulse train</option>
+      <option value="halfrect">Half-wave rectified sine</option>
+      <option value="fullrect">Full-wave rectified sine</option>
+      <option value="expdecay">Exponential sawtooth</option>
+    </select>
+  </div>
+  <div>
+    <label style="font-size:13px;color:var(--text-secondary);display:block;margin-bottom:4px;">Harmonics <span id="nOut" style="color:var(--text-primary);font-weight:500;">7</span></label>
+    <input type="range" id="nH" min="1" max="60" step="1" value="7" style="width:100%;" />
+  </div>
+  <div>
+    <label style="font-size:13px;color:var(--text-secondary);display:block;margin-bottom:4px;">Duty cycle <span id="dOut" style="color:var(--text-primary);font-weight:500;">0.30</span></label>
+    <input type="range" id="duty" min="0.05" max="0.95" step="0.01" value="0.3" style="width:100%;" />
+  </div>
+</div>
+
+<div style="display:flex;gap:20px;flex-wrap:wrap;align-items:center;margin-bottom:12px;font-size:13px;color:var(--text-secondary);">
+  <label style="display:flex;align-items:center;gap:6px;cursor:pointer;"><input type="checkbox" id="showH" style="width:auto;" /> Show individual harmonics</label>
+  <label style="display:flex;align-items:center;gap:6px;cursor:pointer;"><input type="checkbox" id="showT" checked style="width:auto;" /> Show target</label>
+  <label style="display:flex;align-items:center;gap:6px;cursor:pointer;"><input type="checkbox" id="logSp" style="width:auto;" /> Spectrum in dB</label>
+</div>
+
+<div style="position:relative;width:100%;height:260px;background:var(--surface-1);border-radius:var(--radius);margin-bottom:1rem;">
+  <canvas id="wave" role="img" aria-label="Time-domain plot of the target waveform and its truncated Fourier partial sum over two periods">Time-domain reconstruction plot.</canvas>
+</div>
+
+<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin-bottom:1.5rem;">
+  <div style="background:var(--surface-1);border-radius:var(--radius);padding:1rem;">
+    <div style="font-size:13px;color:var(--text-secondary);">RMS error</div>
+    <div id="mRms" style="font-size:24px;font-weight:500;">—</div>
+  </div>
+  <div style="background:var(--surface-1);border-radius:var(--radius);padding:1rem;">
+    <div style="font-size:13px;color:var(--text-secondary);">Gibbs overshoot</div>
+    <div id="mGib" style="font-size:24px;font-weight:500;">—</div>
+  </div>
+  <div style="background:var(--surface-1);border-radius:var(--radius);padding:1rem;">
+    <div style="font-size:13px;color:var(--text-secondary);">THD</div>
+    <div id="mThd" style="font-size:24px;font-weight:500;">—</div>
+  </div>
+  <div style="background:var(--surface-1);border-radius:var(--radius);padding:1rem;">
+    <div style="font-size:13px;color:var(--text-secondary);">Power captured</div>
+    <div id="mPow" style="font-size:24px;font-weight:500;">—</div>
+  </div>
+</div>
+
+<div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:8px;font-size:12px;color:var(--text-secondary);">
+  <span style="display:flex;align-items:center;gap:4px;"><span style="width:10px;height:10px;border-radius:2px;background:#2a78d6;"></span>Included in sum</span>
+  <span style="display:flex;align-items:center;gap:4px;"><span style="width:10px;height:10px;border-radius:2px;background:#898781;"></span>Truncated</span>
+</div>
+<div style="position:relative;width:100%;height:220px;">
+  <canvas id="spec" role="img" aria-label="Bar chart of harmonic magnitude versus harmonic index, with included harmonics highlighted">Harmonic magnitude spectrum.</canvas>
+</div>
+
+<div style="margin-top:1.25rem;display:flex;gap:8px;flex-wrap:wrap;">
+  <button onclick="sendPrompt('Explain why the Gibbs overshoot stays near 9% no matter how many harmonics I add')">Why does overshoot plateau? ↗</button>
+  <button onclick="sendPrompt('Add a custom waveform equation input to the Fourier visualizer')">Add custom f(t) input ↗</button>
+</div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+<script>
+(function(){
+  var TAU = Math.PI*2, M = 4096, NMAX = 60;
+  var css = getComputedStyle(document.documentElement);
+  var isDark = matchMedia('(prefers-color-scheme: dark)').matches;
+  var inkMuted = isDark ? '#898781' : '#898781';
+  var inkGrid  = isDark ? '#2c2c2a' : '#e1e0d9';
+  var inkAxis  = isDark ? '#383835' : '#c3c2b7';
+  var inkPri   = isDark ? '#ffffff' : '#0b0b0b';
+  var cBlue    = isDark ? '#3987e5' : '#2a78d6';
+  var cGray    = '#898781';
+
+  function target(name, t, d){
+    var x = ((t % TAU) + TAU) % TAU;
+    switch(name){
+      case 'square':   return x < Math.PI ? 1 : -1;
+      case 'saw':      return x/Math.PI - 1;
+      case 'tri':      return (2/Math.PI)*Math.asin(Math.sin(x));
+      case 'pulse':    return x < TAU*d ? 1 : 0;
+      case 'halfrect': return Math.max(Math.sin(x), 0);
+      case 'fullrect': return Math.abs(Math.sin(x));
+      case 'expdecay': return Math.exp(-3*x/TAU)*2 - 1;
+    }
+    return 0;
+  }
+
+  var coef = { a0:0, a:[], b:[], c:[] };
+
+  function analyze(name, d){
+    var a0 = 0, a = new Float64Array(NMAX+1), b = new Float64Array(NMAX+1);
+    var f = new Float64Array(M);
+    for (var i=0;i<M;i++){ f[i] = target(name, i*TAU/M, d); a0 += f[i]; }
+    a0 /= M;
+    for (var n=1;n<=NMAX;n++){
+      var sa=0, sb=0;
+      for (var j=0;j<M;j++){
+        var th = n*j*TAU/M;
+        sa += f[j]*Math.cos(th);
+        sb += f[j]*Math.sin(th);
+      }
+      a[n] = 2*sa/M; b[n] = 2*sb/M;
+    }
+    var c = new Float64Array(NMAX+1);
+    for (var k=1;k<=NMAX;k++) c[k] = Math.sqrt(a[k]*a[k] + b[k]*b[k]);
+    coef = { a0:a0, a:a, b:b, c:c, f:f };
+  }
+
+  function partial(t, N){
+    var s = coef.a0;
+    for (var n=1;n<=N;n++) s += coef.a[n]*Math.cos(n*t) + coef.b[n]*Math.sin(n*t);
+    return s;
+  }
+
+  var wc = document.getElementById('wave'), wctx = wc.getContext('2d');
+
+  function drawWave(name, N, d, showH, showT){
+    var box = wc.parentElement, dpr = window.devicePixelRatio || 1;
+    var W = box.clientWidth, H = box.clientHeight;
+    wc.width = W*dpr; wc.height = H*dpr; wc.style.width = W+'px'; wc.style.height = H+'px';
+    wctx.setTransform(dpr,0,0,dpr,0,0);
+    wctx.clearRect(0,0,W,H);
+
+    var padL = 34, padR = 12, padT = 16, padB = 24;
+    var pw = W - padL - padR, ph = H - padT - padB;
+    var yMax = 1.35, tMax = 2*TAU;
+    var X = function(t){ return padL + (t/tMax)*pw; };
+    var Y = function(v){ return padT + ph/2 - (v/yMax)*(ph/2); };
+
+    wctx.strokeStyle = inkGrid; wctx.lineWidth = 1;
+    [-1,-0.5,0.5,1].forEach(function(v){
+      wctx.beginPath(); wctx.moveTo(padL, Y(v)); wctx.lineTo(W-padR, Y(v)); wctx.stroke();
+    });
+    wctx.strokeStyle = inkAxis;
+    wctx.beginPath(); wctx.moveTo(padL, Y(0)); wctx.lineTo(W-padR, Y(0)); wctx.stroke();
+    wctx.fillStyle = inkMuted; wctx.font = '11px sans-serif'; wctx.textAlign = 'right';
+    [-1,0,1].forEach(function(v){ wctx.fillText(v.toFixed(0), padL-6, Y(v)+4); });
+    wctx.textAlign = 'center';
+    [0,1,2].forEach(function(k){ if(k) wctx.fillText(k+'T', X(k*TAU), H-6); });
+
+    if (showH){
+      wctx.lineWidth = 1;
+      for (var n=1;n<=N;n++){
+        wctx.strokeStyle = isDark ? 'rgba(57,135,229,0.28)' : 'rgba(42,120,214,0.25)';
+        wctx.beginPath();
+        for (var p=0;p<=600;p++){
+          var t = p/600*tMax;
+          var v = coef.a[n]*Math.cos(n*t) + coef.b[n]*Math.sin(n*t);
+          p ? wctx.lineTo(X(t), Y(v)) : wctx.moveTo(X(t), Y(v));
+        }
+        wctx.stroke();
+      }
+    }
+
+    if (showT){
+      wctx.strokeStyle = cGray; wctx.lineWidth = 2; wctx.setLineDash([5,4]);
+      wctx.beginPath();
+      for (var q=0;q<=1400;q++){
+        var tt = q/1400*tMax, vv = target(name, tt, d);
+        q ? wctx.lineTo(X(tt), Y(vv)) : wctx.moveTo(X(tt), Y(vv));
+      }
+      wctx.stroke(); wctx.setLineDash([]);
+    }
+
+    wctx.strokeStyle = cBlue; wctx.lineWidth = 2; wctx.lineJoin = 'round';
+    wctx.beginPath();
+    for (var r=0;r<=1200;r++){
+      var t3 = r/1200*tMax, v3 = partial(t3, N);
+      r ? wctx.lineTo(X(t3), Y(v3)) : wctx.moveTo(X(t3), Y(v3));
+    }
+    wctx.stroke();
+  }
+
+  var chart = null;
+  function drawSpec(N, log){
+    var labels = [], data = [], colors = [];
+    for (var n=1;n<=NMAX;n++){
+      labels.push(n);
+      var mag = coef.c[n];
+      data.push(log ? (mag > 1e-9 ? 20*Math.log10(mag) : -120) : mag);
+      colors.push(n <= N ? cBlue : cGray);
+    }
+    if (chart) chart.destroy();
+    chart = new Chart(document.getElementById('spec'), {
+      type: 'bar',
+      data: { labels: labels, datasets: [{ label: 'Magnitude', data: data, backgroundColor: colors, borderRadius: 2, barPercentage: 0.75 }] },
+      options: {
+        responsive: true, maintainAspectRatio: false, animation: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: { callbacks: { label: function(c){
+            var n = c.dataIndex + 1;
+            var ph = Math.atan2(-coef.b[n], coef.a[n]) * 180/Math.PI;
+            return 'n=' + n + '  |c|=' + coef.c[n].toFixed(4) + '  phase=' + ph.toFixed(1) + '\u00B0';
+          } } }
+        },
+        scales: {
+          x: { title: { display: true, text: 'harmonic index n', color: inkMuted, font: { size: 11 } },
+               grid: { display: false }, ticks: { color: inkMuted, font: { size: 10 }, autoSkip: true, maxRotation: 0 },
+               border: { color: inkAxis } },
+          y: { beginAtZero: !log, min: log ? -80 : 0,
+               title: { display: true, text: log ? 'magnitude (dB)' : 'magnitude', color: inkMuted, font: { size: 11 } },
+               grid: { color: inkGrid }, ticks: { color: inkMuted, font: { size: 10 } }, border: { color: inkAxis } }
+        }
+      }
+    });
+  }
+
+  function metrics(name, N, d){
+    var se = 0, peakT = 0, peakR = 0;
+    for (var i=0;i<M;i++){
+      var t = i*TAU/M, tv = coef.f[i], rv = partial(t, N);
+      se += (tv-rv)*(tv-rv);
+      if (Math.abs(tv) > peakT) peakT = Math.abs(tv);
+      if (Math.abs(rv) > peakR) peakR = Math.abs(rv);
+    }
+    var rms = Math.sqrt(se/M);
+    var over = peakT > 1e-9 ? (peakR/peakT - 1)*100 : 0;
+
+    var acSum = 0, incSum = 0;
+    for (var n=1;n<=NMAX;n++){ acSum += coef.c[n]*coef.c[n]; if (n<=N) incSum += coef.c[n]*coef.c[n]; }
+    var harm = 0;
+    for (var k=2;k<=NMAX;k++) harm += coef.c[k]*coef.c[k];
+    var thd = coef.c[1] > 1e-6 ? Math.sqrt(harm)/coef.c[1]*100 : NaN;
+    var tot = acSum + coef.a0*coef.a0*0;
+    var pow = tot > 1e-12 ? incSum/tot*100 : 100;
+
+    document.getElementById('mRms').textContent = rms.toFixed(4);
+    document.getElementById('mGib').textContent = (over >= 0 ? '+' : '') + over.toFixed(2) + '%';
+    document.getElementById('mThd').textContent = isNaN(thd) ? 'n/a' : thd.toFixed(1) + '%';
+    document.getElementById('mPow').textContent = pow.toFixed(2) + '%';
+  }
+
+  var elW = document.getElementById('wf'), elN = document.getElementById('nH'),
+      elD = document.getElementById('duty'), elH = document.getElementById('showH'),
+      elT = document.getElementById('showT'), elL = document.getElementById('logSp');
+  var lastKey = '';
+
+  function render(){
+    var name = elW.value, N = +elN.value, d = +elD.value;
+    document.getElementById('nOut').textContent = N;
+    document.getElementById('dOut').textContent = d.toFixed(2);
+    var key = name + '|' + (name === 'pulse' ? d.toFixed(2) : '');
+    if (key !== lastKey){ analyze(name, d); lastKey = key; }
+    drawWave(name, N, d, elH.checked, elT.checked);
+    metrics(name, N, d);
+    drawSpec(N, elL.checked);
+  }
+
+  [elW, elN, elD, elH, elT, elL].forEach(function(e){ e.addEventListener('input', render); e.addEventListener('change', render); });
+  window.addEventListener('resize', function(){ drawWave(elW.value, +elN.value, +elD.value, elH.checked, elT.checked); });
+  render();
+})();
+</script>
