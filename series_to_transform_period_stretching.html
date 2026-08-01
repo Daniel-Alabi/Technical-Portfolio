@@ -1,0 +1,185 @@
+<div style="padding:0.5rem 0;">
+<h2 class="sr-only" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)">Interactive demonstration: a rectangular pulse train in time, with its Fourier series line spectrum plotted against the sinc envelope. Increasing the period makes the spectral lines denser while the envelope stays fixed.</h2>
+
+<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:14px;margin-bottom:14px;">
+  <div>
+    <label style="font-size:13px;color:var(--text-secondary);display:block;margin-bottom:4px;">Period T<sub>0</sub> &nbsp;<span id="t0Out" style="color:var(--text-primary);font-weight:500;">4.0</span></label>
+    <input type="range" id="t0" min="2" max="40" step="0.5" value="4" style="width:100%;" />
+  </div>
+  <div>
+    <label style="font-size:13px;color:var(--text-secondary);display:block;margin-bottom:4px;">Pulse width &tau; &nbsp;<span id="tauOut" style="color:var(--text-primary);font-weight:500;">1.00</span></label>
+    <input type="range" id="tau" min="0.4" max="2" step="0.05" value="1" style="width:100%;" />
+  </div>
+  <div style="display:flex;align-items:flex-end;gap:8px;">
+    <button id="play" style="flex:1;"><i class="ti ti-player-play" aria-hidden="true" style="font-size:16px;vertical-align:-2px;margin-right:4px;"></i>Stretch T<sub>0</sub></button>
+  </div>
+</div>
+
+<div style="display:flex;gap:18px;flex-wrap:wrap;align-items:center;margin-bottom:14px;font-size:13px;color:var(--text-secondary);">
+  <label style="display:flex;align-items:center;gap:6px;cursor:pointer;"><input type="checkbox" id="scaled" checked style="width:auto;" /> Plot T<sub>0</sub>&middot;c<sub>n</sub> instead of c<sub>n</sub></label>
+  <label style="display:flex;align-items:center;gap:6px;cursor:pointer;"><input type="checkbox" id="env" checked style="width:auto;" /> Show envelope</label>
+</div>
+
+<div style="font-size:12px;color:var(--text-secondary);margin-bottom:6px;">Time domain &mdash; pulse train, window t &isin; [&minus;10, 10]</div>
+<div style="position:relative;width:100%;height:150px;background:var(--surface-1);border-radius:var(--radius);margin-bottom:1.25rem;">
+  <canvas id="td" role="img" aria-label="Rectangular pulse train in the time domain; pulses move apart as the period increases">Pulse train time-domain plot.</canvas>
+</div>
+
+<div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:6px;font-size:12px;color:var(--text-secondary);">
+  <span style="display:flex;align-items:center;gap:5px;"><span style="width:10px;height:10px;border-radius:2px;background:#2a78d6;"></span>Series coefficients (discrete lines)</span>
+  <span style="display:flex;align-items:center;gap:5px;"><span style="width:14px;height:0;border-top:2px dashed #D85A30;"></span>Transform of one pulse (continuous)</span>
+</div>
+<div style="position:relative;width:100%;height:230px;background:var(--surface-1);border-radius:var(--radius);margin-bottom:1.25rem;">
+  <canvas id="fd" role="img" aria-label="Frequency domain stem plot of Fourier series coefficients overlaid on the sinc envelope of a single pulse">Line spectrum and sinc envelope.</canvas>
+</div>
+
+<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:12px;">
+  <div style="background:var(--surface-1);border-radius:var(--radius);padding:0.85rem 1rem;">
+    <div style="font-size:12px;color:var(--text-secondary);">Line spacing f<sub>0</sub></div>
+    <div id="mF0" style="font-size:22px;font-weight:500;">—</div>
+  </div>
+  <div style="background:var(--surface-1);border-radius:var(--radius);padding:0.85rem 1rem;">
+    <div style="font-size:12px;color:var(--text-secondary);">Duty cycle = c<sub>0</sub></div>
+    <div id="mDuty" style="font-size:22px;font-weight:500;">—</div>
+  </div>
+  <div style="background:var(--surface-1);border-radius:var(--radius);padding:0.85rem 1rem;">
+    <div style="font-size:12px;color:var(--text-secondary);">Lines per main lobe</div>
+    <div id="mLines" style="font-size:22px;font-weight:500;">—</div>
+  </div>
+  <div style="background:var(--surface-1);border-radius:var(--radius);padding:0.85rem 1rem;">
+    <div style="font-size:12px;color:var(--text-secondary);">First null 1/&tau;</div>
+    <div id="mNull" style="font-size:22px;font-weight:500;">—</div>
+  </div>
+</div>
+
+<div style="margin-top:1.25rem;display:flex;gap:8px;flex-wrap:wrap;">
+  <button onclick="sendPrompt('Walk me through the algebra that turns the Fourier series sum into the Fourier transform integral as T0 goes to infinity')">Show the limit algebra ↗</button>
+  <button onclick="sendPrompt('Why does the sinc envelope stay fixed when I change T0 but move when I change tau?')">Why is the envelope T0-invariant? ↗</button>
+</div>
+</div>
+
+<script>
+(function(){
+  var isDark = matchMedia('(prefers-color-scheme: dark)').matches;
+  var grid = isDark ? '#2c2c2a' : '#e1e0d9';
+  var axis = isDark ? '#383835' : '#c3c2b7';
+  var muted = '#898781';
+  var cBlue = isDark ? '#3987e5' : '#2a78d6';
+  var cCoral = isDark ? '#F0997B' : '#D85A30';
+  var cFill = isDark ? 'rgba(57,135,229,0.30)' : 'rgba(42,120,214,0.20)';
+
+  function sinc(x){ return Math.abs(x) < 1e-10 ? 1 : Math.sin(Math.PI*x)/(Math.PI*x); }
+
+  function setup(cv){
+    var box = cv.parentElement, dpr = window.devicePixelRatio || 1;
+    var W = box.clientWidth, H = box.clientHeight;
+    cv.width = W*dpr; cv.height = H*dpr; cv.style.width = W+'px'; cv.style.height = H+'px';
+    var c = cv.getContext('2d');
+    c.setTransform(dpr,0,0,dpr,0,0);
+    c.clearRect(0,0,W,H);
+    return { c:c, W:W, H:H };
+  }
+
+  function drawTime(T0, tau){
+    var s = setup(document.getElementById('td')), c = s.c, W = s.W, H = s.H;
+    var padL = 30, padR = 12, padT = 14, padB = 22;
+    var pw = W-padL-padR, ph = H-padT-padB, tMax = 10;
+    var X = function(t){ return padL + (t+tMax)/(2*tMax)*pw; };
+    var y0 = padT + ph*0.82, y1 = padT + ph*0.12;
+
+    c.strokeStyle = grid; c.lineWidth = 1;
+    for (var g=-10;g<=10;g+=5){ c.beginPath(); c.moveTo(X(g), padT); c.lineTo(X(g), y0); c.stroke(); }
+    c.strokeStyle = axis; c.beginPath(); c.moveTo(padL, y0); c.lineTo(W-padR, y0); c.stroke();
+
+    var kMax = Math.ceil((tMax + tau)/T0) + 1;
+    c.fillStyle = cFill; c.strokeStyle = cBlue; c.lineWidth = 2;
+    for (var k=-kMax;k<=kMax;k++){
+      var ctr = k*T0, a = ctr - tau/2, b = ctr + tau/2;
+      if (b < -tMax || a > tMax) continue;
+      var xa = X(Math.max(a,-tMax)), xb = X(Math.min(b,tMax));
+      c.fillRect(xa, y1, xb-xa, y0-y1);
+      c.beginPath(); c.moveTo(xa, y0); c.lineTo(xa, y1); c.lineTo(xb, y1); c.lineTo(xb, y0); c.stroke();
+    }
+
+    c.fillStyle = muted; c.font = '11px sans-serif'; c.textAlign = 'center';
+    for (var t=-10;t<=10;t+=5) c.fillText(t, X(t), H-6);
+    c.textAlign = 'right'; c.fillText('1', padL-5, y1+4); c.fillText('0', padL-5, y0+4);
+  }
+
+  function drawFreq(T0, tau, scaled, showEnv){
+    var s = setup(document.getElementById('fd')), c = s.c, W = s.W, H = s.H;
+    var padL = 40, padR = 12, padT = 16, padB = 26;
+    var pw = W-padL-padR, ph = H-padT-padB, fMax = 5;
+    var yTop = scaled ? 2.2 : 1.1, yBot = scaled ? -0.6 : -0.3;
+    var X = function(f){ return padL + (f+fMax)/(2*fMax)*pw; };
+    var Y = function(v){ return padT + (yTop-v)/(yTop-yBot)*ph; };
+
+    c.strokeStyle = grid; c.lineWidth = 1;
+    for (var g=-5;g<=5;g++){ c.beginPath(); c.moveTo(X(g), padT); c.lineTo(X(g), padT+ph); c.stroke(); }
+    c.strokeStyle = axis; c.beginPath(); c.moveTo(padL, Y(0)); c.lineTo(W-padR, Y(0)); c.stroke();
+
+    c.fillStyle = muted; c.font = '11px sans-serif'; c.textAlign = 'center';
+    for (var f=-4;f<=4;f+=2) c.fillText(f, X(f), H-8);
+    c.fillText('frequency', X(0), H-8+0);
+    c.textAlign = 'right';
+    var ticks = scaled ? [0,1,2] : [0,0.5,1];
+    ticks.forEach(function(v){ c.fillText(v.toFixed(1), padL-6, Y(v)+4); });
+
+    if (showEnv){
+      c.strokeStyle = cCoral; c.lineWidth = 2; c.setLineDash([5,4]);
+      c.beginPath();
+      for (var p=0;p<=900;p++){
+        var ff = -fMax + p/900*2*fMax;
+        var ev = (scaled ? tau : tau/T0) * sinc(ff*tau);
+        p ? c.lineTo(X(ff), Y(ev)) : c.moveTo(X(ff), Y(ev));
+      }
+      c.stroke(); c.setLineDash([]);
+    }
+
+    var nMax = Math.floor(fMax*T0);
+    var thin = nMax > 160;
+    c.strokeStyle = cBlue; c.lineWidth = thin ? 1 : 1.5; c.fillStyle = cBlue;
+    for (var n=-nMax;n<=nMax;n++){
+      var fn = n/T0;
+      var cn = (tau/T0)*sinc(n*tau/T0);
+      var val = scaled ? cn*T0 : cn;
+      c.beginPath(); c.moveTo(X(fn), Y(0)); c.lineTo(X(fn), Y(val)); c.stroke();
+      if (!thin){ c.beginPath(); c.arc(X(fn), Y(val), 2.2, 0, 6.2832); c.fill(); }
+    }
+  }
+
+  var elT0 = document.getElementById('t0'), elTau = document.getElementById('tau'),
+      elSc = document.getElementById('scaled'), elEn = document.getElementById('env'),
+      elPlay = document.getElementById('play');
+
+  function render(){
+    var T0 = +elT0.value, tau = +elTau.value;
+    if (tau > T0) { tau = T0; elTau.value = tau; }
+    document.getElementById('t0Out').textContent = T0.toFixed(1);
+    document.getElementById('tauOut').textContent = tau.toFixed(2);
+    drawTime(T0, tau);
+    drawFreq(T0, tau, elSc.checked, elEn.checked);
+    document.getElementById('mF0').textContent = (1/T0).toFixed(3);
+    document.getElementById('mDuty').textContent = (tau/T0).toFixed(3);
+    document.getElementById('mLines').textContent = Math.round(T0/tau);
+    document.getElementById('mNull').textContent = (1/tau).toFixed(2);
+  }
+
+  var anim = null;
+  elPlay.addEventListener('click', function(){
+    if (anim){ cancelAnimationFrame(anim); anim = null; elPlay.innerHTML = '<i class="ti ti-player-play" aria-hidden="true" style="font-size:16px;vertical-align:-2px;margin-right:4px;"></i>Stretch T<sub>0</sub>'; return; }
+    elPlay.innerHTML = '<i class="ti ti-player-pause" aria-hidden="true" style="font-size:16px;vertical-align:-2px;margin-right:4px;"></i>Pause';
+    var v = +elT0.value;
+    var step = function(){
+      v += 0.18;
+      if (v >= 40){ v = 40; elT0.value = v; render(); anim = null; elPlay.innerHTML = '<i class="ti ti-player-play" aria-hidden="true" style="font-size:16px;vertical-align:-2px;margin-right:4px;"></i>Stretch T<sub>0</sub>'; return; }
+      elT0.value = v; render(); anim = requestAnimationFrame(step);
+    };
+    anim = requestAnimationFrame(step);
+  });
+
+  [elT0, elTau, elSc, elEn].forEach(function(e){ e.addEventListener('input', render); e.addEventListener('change', render); });
+  window.addEventListener('resize', render);
+  render();
+})();
+</script>
